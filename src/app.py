@@ -299,8 +299,8 @@ if filter_mode == 'Månadsvis' or filter_mode == 'Datumintervall':
     def prepare_monthly_data(df, period_name):
         df_temp = df.copy()
         df_temp['order_date'] = pd.to_datetime(df_temp['order_date'])
-        # Aggregate both gross sales and returns
-        monthly_df = df_temp.set_index('order_date').resample('M')[['sales', 'return_sales']].sum().reset_index()
+        # Aggregate both gross sales and returns using 'ME' for Month End
+        monthly_df = df_temp.set_index('order_date').resample('ME')[['sales', 'return_sales']].sum().reset_index()
         monthly_df['net_sales'] = monthly_df['sales'] - monthly_df['return_sales']
         monthly_df['net_sales_kSEK'] = monthly_df['net_sales'] / 1000
         monthly_df['return_sales_kSEK'] = monthly_df['return_sales'] / 1000
@@ -691,8 +691,8 @@ st.dataframe(store_performance_display[display_columns].style.format({
                 'Returandel (%)': '{:.2f}%',
                 'Returandel YoY (p.p.)': '{:+.2f}',
                 'Antal Ordrar YoY (%)': '{:+.1f}%'}, na_rep="-")
-             .applymap(color_yoy, subset=['Nettoförsäljning YoY (%)', 'Antal Ordrar YoY (%)'])
-             .applymap(color_return_yoy, subset=['Returandel YoY (p.p.)'])
+             .map(color_yoy, subset=['Nettoförsäljning YoY (%)', 'Antal Ordrar YoY (%)'])
+             .map(color_return_yoy, subset=['Returandel YoY (p.p.)'])
              .bar(subset=['Nettoförsäljning (kSEK)'], color='#aec7e8', vmin=0),
              use_container_width=True)
 
