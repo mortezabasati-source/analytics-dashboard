@@ -38,18 +38,26 @@ def create_mock_data():
         'return_quantity': np.random.randint(0, 2, 500),
     }
     df = pd.DataFrame(data)
-    # Ensure mock data has the same calculated columns as the real data
-    df['net_sales'] = df['sales'] - df['return_sales']
-    df['return_rate'] = (df['return_sales'] / df['sales']).fillna(0)
-    df['sales'] = df['sales'].round(2)
+    
+    # --- Apply Optimizations to Mock Data ---
     df['order_date'] = pd.to_datetime(df['order_date'])
-    # Add time-based keys to be consistent with the main function
+    
+    # Downcast numeric types
+    for col in ['sales', 'return_sales']:
+        df[col] = df[col].astype('float32')
+    for col in ['quantity', 'return_quantity']:
+        df[col] = df[col].astype('int32')
+        
+    # Convert object types to category for memory efficiency
+    for col in ['category', 'product_name', 'store_name', 'location']:
+        df[col] = df[col].astype('category')
+
     df['year_month_key'] = df['order_date'].dt.strftime('%Y-M%m')
     df['year_week_key'] = df['order_date'].dt.strftime('%Y-W%U')
     df['order_date'] = df['order_date'].dt.date # Convert to date object
     return df
 
-@st.cache_data(ttl=1800) # Cache data for 30 minutes
+@st.cache_data(ttl=300, max_entries=5) # Cache for 5 mins, keep only 5 recent entries
 def load_data():
     """Loads data from the MySQL view with a fallback to mock data."""
     try:
@@ -110,14 +118,22 @@ def load_data():
 
         # Convert data types on standardized column names
         df['order_date'] = pd.to_datetime(df['order_date'], errors='coerce')
-        for col in ['sales', 'quantity', 'return_sales', 'return_quantity']:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # --- Memory Optimization: Downcasting and Category Conversion ---
+        for col in ['sales', 'return_sales']:
+            df[col] = pd.to_numeric(df[col], errors='coerce').astype('float32')
+        for col in ['quantity', 'return_quantity']:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype('int32')
+        
+        for col in ['category', 'product_name', 'store_name', 'location']:
+            if col in df.columns:
+                df[col] = df[col].astype('category')
         
         # --- Simplified Business Logic ---
         # Calculate net_sales and return_rate directly without any time shifting.
         # This simplifies debugging and ensures consistency.
         df['net_sales'] = df['sales'] - df['return_sales'].fillna(0)
-        df['return_rate'] = (df['return_sales'] / df['sales']).replace([np.inf, -np.inf], 0).fillna(0)
+        df['return_rate'] = (df['return_sales'] / df['sales'].replace(0, np.nan)).replace([np.inf, -np.inf], 0).fillna(0)
         df.dropna(subset=['order_date', 'sales', 'quantity'], inplace=True) # Keep main columns clean
 
         # --- Add Time-Based Keys for Robust Filtering ---

@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import gc
 import plotly.express as px
 from datetime import datetime, timedelta
 from db import load_data # Import the data loading function
@@ -636,6 +637,9 @@ if not filtered_df.empty:
     # Add a flag to the 'Status' column
     store_performance.loc[store_performance['store_name'].isin(top_20_high_return_stores), 'Status'] += '🚩'
 
+    del df_corr_stores, weekly_store_agg, store_corr_totals
+    gc.collect()
+
 # --- Apply Status Filter ---
 if selected_status_key == 'Medal':
     store_performance = store_performance[store_performance['Status'].str.contains('🥇') & ~store_performance['Status'].str.contains('🚩')]
@@ -644,6 +648,10 @@ elif selected_status_key == 'Flag':
 elif selected_status_key == 'Both':
     store_performance = store_performance[store_performance['Status'].str.contains('🥇') & store_performance['Status'].str.contains('🚩')]
 # 'All' requires no filtering
+
+if 'store_performance_prev' in locals():
+    del store_performance_prev
+    gc.collect()
 
 
 # Sort by net sales by default
@@ -731,6 +739,9 @@ if not prev_year_df.empty:
                 st.dataframe(median_weekly_sales.style.format({'Median Veckoförsäljning (SEK)': '{:,.0f}'}), use_container_width=True)
             else:
                 st.success("Inga nya butiker med försäljning under denna period.", icon="✅")
+            
+            del new_stores_df, median_weekly_sales
+            gc.collect()
 
         else:
             st.success("Inga nya butiker under denna period.", icon="✅")
@@ -752,6 +763,9 @@ if not prev_year_df.empty:
                 st.dataframe(median_weekly_sales_churned.style.format({'Median Veckoförsäljning (SEK)': '{:,.0f}'}), use_container_width=True)
             else:
                 st.success("Inga förlorade butiker med försäljning under denna period.", icon="✅")
+            
+            del churned_stores_df, median_weekly_sales_churned
+            gc.collect()
 
         else:
             st.success("Inga butiker förlorade under denna period.", icon="✅")
@@ -768,9 +782,11 @@ with col_chart1:
 
 with col_chart2:
     # Create a new key combining category (typ) and product_name (sort) for unique identification
-    df_for_products = filtered_df.copy()
-    df_for_products['full_product_name'] = df_for_products['category'] + ' - ' + df_for_products['product_name']
-    top_products = df_for_products.groupby('full_product_name')['sales'].sum().nlargest(10).sort_values(ascending=True).reset_index()
+    # No need to copy, we can create the new column on a temporary view
+    top_products = (
+        filtered_df.assign(full_product_name=filtered_df['category'].astype(str) + ' - ' + filtered_df['product_name'].astype(str))
+        .groupby('full_product_name')['sales'].sum().nlargest(10).sort_values(ascending=True).reset_index()
+    )
     top_products['sales'] = top_products['sales'] / 1000 # Convert to thousands
     fig_bar = px.bar(top_products, x='sales', y='full_product_name', orientation='h', title='Topp 10 Produkter', labels={'full_product_name': 'Produkt (Typ - Sort)', 'sales': 'Bruttoförsäljning (kSEK)'})
     fig_bar.update_layout(title_x=0, margin=dict(l=0, r=0, t=30, b=0), yaxis={'categoryorder':'total ascending'})
