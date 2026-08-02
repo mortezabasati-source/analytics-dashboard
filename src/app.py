@@ -740,7 +740,7 @@ if not prev_year_df.empty:
     st.markdown("### Analys av Nya och Förlorade Butiker")
     st.info(
         "Här visas butiker som tillkommit eller försvunnit i den valda perioden jämfört med samma period föregående år. "
-        "Prestationen mäts som medianen av nettoförsäljningen per vecka.",
+        "Prestationen mäts som totalt nettoförsäljning under perioden.",
         icon="💡"
     )
 
@@ -767,18 +767,17 @@ if not prev_year_df.empty:
     with col_new:
         st.markdown("#### Nya Butiker")
         if new_stores_set:
-            # 3. Safe Weekly Median Calculation for New Stores
+            # 3. Calculate Total Net Sales for New Stores
             new_stores_df = filtered_df[filtered_df['store_name'].isin(new_stores_set)].copy()
-            weekly_sales = new_stores_df.groupby(['store_name', 'year_week_key'])['net_sales'].sum()
-            median_weekly_sales = weekly_sales.groupby('store_name').median().reset_index()
-            median_weekly_sales.rename(columns={'store_name': 'Butik', 'net_sales': 'Median Veckoförsäljning (SEK)'}, inplace=True)
-            median_weekly_sales = median_weekly_sales[median_weekly_sales['Median Veckoförsäljning (SEK)'] > 0] # Filter out non-positive median sales
+            total_sales_new = new_stores_df.groupby('store_name')['net_sales'].sum().reset_index()
+            total_sales_new.rename(columns={'store_name': 'Butik', 'net_sales': 'Total Nettoförsäljning (SEK)'}, inplace=True)
+            total_sales_new = total_sales_new[total_sales_new['Total Nettoförsäljning (SEK)'] > 0] # Filter out non-positive sales
 
-            if not median_weekly_sales.empty:
-                total_median_sales_new = median_weekly_sales['Median Veckoförsäljning (SEK)'].sum()
-                st.markdown(f"**Totalt:** `{total_median_sales_new:,.0f} SEK`")
-                median_weekly_sales.sort_values('Median Veckoförsäljning (SEK)', ascending=False, inplace=True)
-                st.dataframe(median_weekly_sales.style.format({'Median Veckoförsäljning (SEK)': '{:,.0f}'}), use_container_width=True)
+            if not total_sales_new.empty:
+                total_sum_new = total_sales_new['Total Nettoförsäljning (SEK)'].sum()
+                st.markdown(f"**Totalt:** `{total_sum_new:,.0f} SEK`")
+                total_sales_new.sort_values('Total Nettoförsäljning (SEK)', ascending=False, inplace=True)
+                st.dataframe(total_sales_new.style.format({'Total Nettoförsäljning (SEK)': '{:,.0f}'}), use_container_width=True)
             else:
                 st.success("Inga nya butiker med positiv försäljning under denna period.", icon="✅")
         else:
@@ -787,18 +786,17 @@ if not prev_year_df.empty:
     with col_churned:
         st.markdown("#### Förlorade Butiker")
         if churned_stores_set:
-            # 3. Safe Weekly Median Calculation for Churned Stores
+            # 3. Calculate Total Net Sales for Churned Stores
             churned_stores_df = prev_year_df[prev_year_df['store_name'].isin(churned_stores_set)].copy()
-            weekly_sales_churned = churned_stores_df.groupby(['store_name', 'year_week_key'])['net_sales'].sum()
-            median_weekly_sales_churned = weekly_sales_churned.groupby('store_name').median().reset_index()
-            median_weekly_sales_churned.rename(columns={'store_name': 'Butik', 'net_sales': 'Median Veckoförsäljning (SEK)'}, inplace=True)
-            median_weekly_sales_churned = median_weekly_sales_churned[median_weekly_sales_churned['Median Veckoförsäljning (SEK)'] > 0] # Filter out non-positive median sales
+            total_sales_churned = churned_stores_df.groupby('store_name')['net_sales'].sum().reset_index()
+            total_sales_churned.rename(columns={'store_name': 'Butik', 'net_sales': 'Total Nettoförsäljning (SEK)'}, inplace=True)
+            total_sales_churned = total_sales_churned[total_sales_churned['Total Nettoförsäljning (SEK)'] > 0] # Filter out non-positive sales
 
-            if not median_weekly_sales_churned.empty:
-                total_median_sales_churned = median_weekly_sales_churned['Median Veckoförsäljning (SEK)'].sum()
-                st.markdown(f"**Totalt:** `{total_median_sales_churned:,.0f} SEK`")
-                median_weekly_sales_churned.sort_values('Median Veckoförsäljning (SEK)', ascending=False, inplace=True)
-                st.dataframe(median_weekly_sales_churned.style.format({'Median Veckoförsäljning (SEK)': '{:,.0f}'}), use_container_width=True)
+            if not total_sales_churned.empty:
+                total_sum_churned = total_sales_churned['Total Nettoförsäljning (SEK)'].sum()
+                st.markdown(f"**Totalt:** `{total_sum_churned:,.0f} SEK`")
+                total_sales_churned.sort_values('Total Nettoförsäljning (SEK)', ascending=False, inplace=True)
+                st.dataframe(total_sales_churned.style.format({'Total Nettoförsäljning (SEK)': '{:,.0f}'}), use_container_width=True)
             else:
                 st.success("Inga förlorade butiker med positiv försäljning under denna period.", icon="✅")
         else:
