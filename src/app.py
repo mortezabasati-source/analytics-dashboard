@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import numpy as np
 import gc
 import plotly.express as px
 from datetime import datetime, timedelta
@@ -298,6 +299,9 @@ st.markdown("---")
 if filter_mode == 'Månadsvis' or filter_mode == 'Datumintervall':
     # --- YoY Monthly Trend Chart ---
     def prepare_monthly_data(df, period_name):
+        if df.empty:
+            return pd.DataFrame() # Return empty DataFrame if input is empty
+
         df_temp = df.copy()
         df_temp['order_date'] = pd.to_datetime(df_temp['order_date'])
         # Aggregate both gross sales and returns using 'ME' for Month End
@@ -377,6 +381,9 @@ if filter_mode == 'Månadsvis' or filter_mode == 'Datumintervall':
 else: # Veckovis
     # --- YoY Weekly Trend Chart ---
     def prepare_weekly_data(df, period_name):
+        if df.empty:
+            return pd.DataFrame() # Return empty DataFrame if input is empty
+
         df_temp = df.copy()
         df_temp['order_date'] = pd.to_datetime(df_temp['order_date'])
         # Resample by week, ending on Saturday (Sunday-Saturday week), using gross sales
@@ -480,6 +487,19 @@ fig_line.update_layout(
 )
 st.plotly_chart(fig_line, use_container_width=True)
 
+# --- Centralized Safe Resample Function ---
+def safe_weekly_resample(df):
+    """
+    Safely resamples a DataFrame weekly, returning an empty DataFrame if the input is empty
+    or if the resample operation results in an empty DataFrame.
+    """
+    if df.empty:
+        return pd.DataFrame()
+    
+    df_temp = df.copy()
+    df_temp['order_date'] = pd.to_datetime(df_temp['order_date'])
+    return df_temp.set_index('order_date').resample('W-SAT')[['sales', 'return_sales']].sum()
+
 # --- Correlated Return Analysis Section (Weekly only) ---
 if filter_mode == 'Veckovis' and not filtered_df.empty:
     st.markdown("---")
@@ -491,10 +511,8 @@ if filter_mode == 'Veckovis' and not filtered_df.empty:
     )
 
     # 1. Prepare data by resampling weekly
-    df_for_corr = filtered_df.copy()
-    df_for_corr['order_date'] = pd.to_datetime(df_for_corr['order_date'])
-    weekly_agg = df_for_corr.set_index('order_date').resample('W-SAT')[['sales', 'return_sales']].sum()
-
+    weekly_agg = safe_weekly_resample(filtered_df)
+    
     # 2. Shift sales data to get previous week's sales
     weekly_agg['sales_prev_week'] = weekly_agg['sales'].shift(1)
 
@@ -563,96 +581,106 @@ if filter_mode == 'Veckovis' and not filtered_df.empty:
 # --- Store Performance Leaderboard ---
 st.markdown("### Butikernas Prestation")
 
-# Group by store and calculate key metrics from the filtered data
-store_performance = filtered_df.groupby('store_name').agg(
+# --- 1. Unified Store List Generation ---
+current_stores = set(filtered_df['store_name'].astype(str).unique())
+previous_stores = set()
+if not prev_year_df.empty:
+    previous_stores = set(prev_year_df['store_name'].astype(str).unique())
+
+all_unique_stores = sorted(list(current_stores.union(previous_stores)))
+store_performance = pd.DataFrame({'store_name': all_unique_stores})
+
+# --- 2. Isolated Metric Aggregation ---
+# Current Period Metrics
+current_agg = filtered_df.groupby('store_name').agg(
     gross_sales=('sales', 'sum'),
     return_sales=('return_sales', 'sum'),
     quantity=('quantity', 'sum')
 ).reset_index()
 
-# Calculate derived metrics for the leaderboard
-store_performance['net_sales'] = store_performance['gross_sales'] - store_performance['return_sales']
-store_performance['return_rate'] = (store_performance['return_sales'] / store_performance['gross_sales'].replace(0, 1)) * 100
-
-# --- Initialize YoY columns to ensure they always exist ---
-store_performance['net_sales_yoy'] = pd.NA
-store_performance['quantity_yoy'] = pd.NA
-store_performance['return_rate_yoy'] = pd.NA
-
- # --- Calculate YoY Performance for Stores ---
+# Previous Period Metrics
+prev_agg = pd.DataFrame()
 if not prev_year_df.empty:
-    store_performance_prev = prev_year_df.groupby('store_name').agg(
+    prev_agg = prev_year_df.groupby('store_name').agg(
         gross_sales_prev=('sales', 'sum'),
         return_sales_prev=('return_sales', 'sum'),
         quantity_prev=('quantity', 'sum')
     ).reset_index()
 
-    store_performance_prev['net_sales_prev'] = store_performance_prev['gross_sales_prev'] - store_performance_prev['return_sales_prev']
-    store_performance_prev['return_rate_prev'] = (store_performance_prev['return_sales_prev'] / store_performance_prev['gross_sales_prev'].replace(0, 1)) * 100
+# Correlated Returns
+corr_agg = pd.DataFrame()
+df_corr_stores = filtered_df.copy()
+if not df_corr_stores.empty:
+    df_corr_stores['order_date'] = pd.to_datetime(df_corr_stores['order_date'])
+    weekly_store_agg = df_corr_stores.groupby('store_name').apply(safe_weekly_resample).reset_index(level=1, drop=True)
+    weekly_store_agg['sales_prev_week'] = weekly_store_agg.groupby(level=0)['sales'].shift(1)
+    store_corr_totals = weekly_store_agg.groupby(level=0)[['return_sales', 'sales_prev_week']].sum()
+    store_corr_totals['correlated_return_rate'] = (store_corr_totals['return_sales'] / store_corr_totals['sales_prev_week'].replace(0, 1)) * 100
+    corr_agg = store_corr_totals.reset_index()
 
-    # Merge with current performance
-    store_performance = pd.merge(
-        store_performance,
-        store_performance_prev[['store_name', 'net_sales_prev', 'return_rate_prev', 'quantity_prev']],
-        on='store_name',
-        how='left'
-    )
-    # Calculate YoY changes
-    epsilon = 1e-9  # To avoid division by zero
-    # Use .loc to update only the rows where a merge was successful
-    valid_yoy_rows = store_performance['net_sales_prev'].notna()
-    store_performance.loc[valid_yoy_rows, 'net_sales_yoy'] = ((store_performance['net_sales'] - store_performance['net_sales_prev']) / (store_performance['net_sales_prev'] + epsilon)) * 100
-    store_performance.loc[valid_yoy_rows, 'quantity_yoy'] = ((store_performance['quantity'] - store_performance['quantity_prev']) / (store_performance['quantity_prev'] + epsilon)) * 100
-    store_performance.loc[valid_yoy_rows, 'return_rate_yoy'] = store_performance['return_rate'] - store_performance['return_rate_prev']
+# --- 3. Safe Merge & YoY Calculation ---
+# Merge all aggregated metrics into the master DataFrame
+store_performance = pd.merge(store_performance, current_agg, on='store_name', how='left')
+if not prev_agg.empty:
+    store_performance = pd.merge(store_performance, prev_agg, on='store_name', how='left')
+if not corr_agg.empty:
+    store_performance = pd.merge(store_performance, corr_agg[['store_name', 'correlated_return_rate']], on='store_name', how='left')
 
+# Fill NaNs for metrics with 0 after merging
+fill_zeros_cols = [
+    'gross_sales', 'return_sales', 'quantity',
+    'gross_sales_prev', 'return_sales_prev', 'quantity_prev',
+    'correlated_return_rate'
+]
+for col in fill_zeros_cols:
+    if col in store_performance.columns:
+        store_performance[col] = store_performance[col].fillna(0)
 
-# --- Create a 'Status' column for medals and flags ---
+# Calculate derived metrics
+store_performance['net_sales'] = store_performance['gross_sales'] - store_performance['return_sales']
+store_performance['return_rate'] = (store_performance['return_sales'] / store_performance['gross_sales'].replace(0, np.nan)) * 100
+
+if 'gross_sales_prev' in store_performance.columns:
+    store_performance['net_sales_prev'] = store_performance['gross_sales_prev'] - store_performance['return_sales_prev']
+    store_performance['return_rate_prev'] = (store_performance['return_sales_prev'] / store_performance['gross_sales_prev'].replace(0, np.nan)) * 100
+
+# Safely calculate YoY metrics
+store_performance['net_sales_yoy'] = np.where(
+    store_performance.get('net_sales_prev', 0) > 0,
+    (store_performance['net_sales'] - store_performance['net_sales_prev']) / store_performance['net_sales_prev'] * 100,
+    pd.NA
+)
+store_performance['quantity_yoy'] = np.where(
+    store_performance.get('quantity_prev', 0) > 0,
+    (store_performance['quantity'] - store_performance['quantity_prev']) / store_performance['quantity_prev'] * 100,
+    pd.NA
+)
+store_performance['return_rate_yoy'] = np.where(
+    store_performance.get('gross_sales_prev', 0) > 0,
+    store_performance['return_rate'] - store_performance['return_rate_prev'],
+    pd.NA
+)
+
+# --- 4. Status Flagging & Display ---
 store_performance['Status'] = ''
 
-# Add Gold Medal for Top 20 Stores by Net Sales
+# Add Gold Medal for Top 20 stores by Current Net Sales
 top_20_sales_stores = store_performance.nlargest(20, 'net_sales')['store_name'].tolist()
 store_performance.loc[store_performance['store_name'].isin(top_20_sales_stores), 'Status'] += '🥇'
 
-# --- Correlated Return Flagging (Applied to all filter modes) ---
-if not filtered_df.empty:
-    # Calculate correlated return rate per store
-    df_corr_stores = filtered_df.copy()
-    df_corr_stores['order_date'] = pd.to_datetime(df_corr_stores['order_date'])
-    
-    # Resample and aggregate per store
-    weekly_store_agg = df_corr_stores.groupby('store_name').resample('W-SAT', on='order_date')[['sales', 'return_sales']].sum()
-    
-    # Shift sales within each store group
-    weekly_store_agg['sales_prev_week'] = weekly_store_agg.groupby(level=0)['sales'].shift(1)
-    
-    # Sum up the relevant totals for the entire period per store
-    store_corr_totals = weekly_store_agg.groupby(level=0)[['return_sales', 'sales_prev_week']].sum()
-    
-    # Calculate the overall correlated return rate for each store
-    store_corr_totals['correlated_return_rate'] = (store_corr_totals['return_sales'] / store_corr_totals['sales_prev_week'].replace(0, 1)) * 100
-    
-    # Get the top 20 stores with the highest correlated return rate
-    top_20_high_return_stores = store_corr_totals.nlargest(20, 'correlated_return_rate').index.tolist()
-    
-    # Add a flag to the 'Status' column
-    store_performance.loc[store_performance['store_name'].isin(top_20_high_return_stores), 'Status'] += '🚩'
-
-    del df_corr_stores, weekly_store_agg, store_corr_totals
-    gc.collect()
+# Add Red Flag for Top 20 stores by Correlated Return Rate
+if 'correlated_return_rate' in store_performance.columns:
+    top_20_return_stores = store_performance.nlargest(20, 'correlated_return_rate')['store_name'].tolist()
+    store_performance.loc[store_performance['store_name'].isin(top_20_return_stores), 'Status'] += '🚩'
 
 # --- Apply Status Filter ---
 if selected_status_key == 'Medal':
-    store_performance = store_performance[store_performance['Status'].str.contains('🥇') & ~store_performance['Status'].str.contains('🚩')]
+    store_performance = store_performance[store_performance['Status'].str.contains('🥇')]
 elif selected_status_key == 'Flag':
-    store_performance = store_performance[store_performance['Status'].str.contains('🚩') & ~store_performance['Status'].str.contains('🥇')]
+    store_performance = store_performance[store_performance['Status'].str.contains('🚩')]
 elif selected_status_key == 'Both':
     store_performance = store_performance[store_performance['Status'].str.contains('🥇') & store_performance['Status'].str.contains('🚩')]
 # 'All' requires no filtering
-
-if 'store_performance_prev' in locals():
-    del store_performance_prev
-    gc.collect()
-
 
 # Sort by net sales by default
 store_performance.sort_values('net_sales', ascending=False, inplace=True)
@@ -673,11 +701,6 @@ store_performance_display['Nettoförsäljning (kSEK)'] /= 1000
 
 # Determine which columns to display based on filter mode
 display_columns = ['Status', 'Butik', 'Nettoförsäljning (kSEK)', 'Nettoförsäljning YoY (%)', 'Returandel (%)', 'Returandel YoY (p.p.)', 'Antal Ordrar', 'Antal Ordrar YoY (%)']
-
-# If there's no previous year data, hide the YoY columns
-# This check is no longer needed as columns are always present
-# if 'net_sales_yoy' not in store_performance_display.columns:
-#     display_columns = [col for col in display_columns if 'YoY' not in col]
 
 # --- Styling function for YoY columns ---
 def color_yoy(val):
@@ -704,7 +727,14 @@ st.dataframe(store_performance_display[display_columns].style.format({
              .bar(subset=['Nettoförsäljning (kSEK)'], color='#aec7e8', vmin=0),
              use_container_width=True)
 
-# --- New and Churned Stores Analysis ---
+# --- Cleanup ---
+del store_performance, store_performance_display
+if 'current_agg' in locals(): del current_agg
+if 'prev_agg' in locals(): del prev_agg
+if 'corr_agg' in locals(): del corr_agg
+gc.collect()
+
+# --- New and Churned Stores Analysis (Refactored) ---
 if not prev_year_df.empty:
     st.markdown("---")
     st.markdown("### Analys av Nya och Förlorade Butiker")
@@ -714,59 +744,63 @@ if not prev_year_df.empty:
         icon="💡"
     )
 
-    current_stores = set(filtered_df['store_name'].unique())
-    previous_stores = set(prev_year_df['store_name'].unique())
+    # 1. Clean Store Names and 2. Robust New/Churned Identification
+    def get_active_stores(df):
+        """Cleans store names and returns a set of stores with sales > 0."""
+        if df.empty:
+            return set()
+        
+        # Filter for positive sales first, then clean and get unique names
+        active_df = df[df['sales'] > 0].copy()
+        cleaned_names = active_df['store_name'].astype(str).str.strip()
+        # Filter out any names that became empty strings after stripping
+        return set(cleaned_names[cleaned_names != ''])
 
-    new_stores_set = current_stores - previous_stores
-    churned_stores_set = previous_stores - current_stores
+    current_stores_set = get_active_stores(filtered_df)
+    previous_stores_set = get_active_stores(prev_year_df)
+
+    new_stores_set = current_stores_set - previous_stores_set
+    churned_stores_set = previous_stores_set - current_stores_set
 
     col_new, col_churned = st.columns(2)
 
     with col_new:
         st.markdown("#### Nya Butiker")
         if new_stores_set:
+            # 3. Safe Weekly Median Calculation for New Stores
             new_stores_df = filtered_df[filtered_df['store_name'].isin(new_stores_set)].copy()
-            # Calculate median of weekly net sales for each new store
-            median_weekly_sales = new_stores_df.groupby(['store_name', 'year_week_key'])['net_sales'].sum().reset_index()
-            median_weekly_sales = median_weekly_sales.groupby('store_name')['net_sales'].median().reset_index()
+            weekly_sales = new_stores_df.groupby(['store_name', 'year_week_key'])['net_sales'].sum()
+            median_weekly_sales = weekly_sales.groupby('store_name').median().reset_index()
             median_weekly_sales.rename(columns={'store_name': 'Butik', 'net_sales': 'Median Veckoförsäljning (SEK)'}, inplace=True)
-            # Filter out stores with 0 median sales
-            median_weekly_sales = median_weekly_sales[median_weekly_sales['Median Veckoförsäljning (SEK)'] > 0]
+            median_weekly_sales = median_weekly_sales[median_weekly_sales['Median Veckoförsäljning (SEK)'] > 0] # Filter out non-positive median sales
+
             if not median_weekly_sales.empty:
                 total_median_sales_new = median_weekly_sales['Median Veckoförsäljning (SEK)'].sum()
                 st.markdown(f"**Totalt:** `{total_median_sales_new:,.0f} SEK`")
                 median_weekly_sales.sort_values('Median Veckoförsäljning (SEK)', ascending=False, inplace=True)
                 st.dataframe(median_weekly_sales.style.format({'Median Veckoförsäljning (SEK)': '{:,.0f}'}), use_container_width=True)
             else:
-                st.success("Inga nya butiker med försäljning under denna period.", icon="✅")
-            
-            del new_stores_df, median_weekly_sales
-            gc.collect()
-
+                st.success("Inga nya butiker med positiv försäljning under denna period.", icon="✅")
         else:
             st.success("Inga nya butiker under denna period.", icon="✅")
 
     with col_churned:
         st.markdown("#### Förlorade Butiker")
         if churned_stores_set:
+            # 3. Safe Weekly Median Calculation for Churned Stores
             churned_stores_df = prev_year_df[prev_year_df['store_name'].isin(churned_stores_set)].copy()
-            # Calculate median of weekly net sales for each churned store from last year's data
-            median_weekly_sales_churned = churned_stores_df.groupby(['store_name', 'year_week_key'])['net_sales'].sum().reset_index()
-            median_weekly_sales_churned = median_weekly_sales_churned.groupby('store_name')['net_sales'].median().reset_index()
+            weekly_sales_churned = churned_stores_df.groupby(['store_name', 'year_week_key'])['net_sales'].sum()
+            median_weekly_sales_churned = weekly_sales_churned.groupby('store_name').median().reset_index()
             median_weekly_sales_churned.rename(columns={'store_name': 'Butik', 'net_sales': 'Median Veckoförsäljning (SEK)'}, inplace=True)
-            # Filter out stores with 0 median sales
-            median_weekly_sales_churned = median_weekly_sales_churned[median_weekly_sales_churned['Median Veckoförsäljning (SEK)'] > 0]
+            median_weekly_sales_churned = median_weekly_sales_churned[median_weekly_sales_churned['Median Veckoförsäljning (SEK)'] > 0] # Filter out non-positive median sales
+
             if not median_weekly_sales_churned.empty:
                 total_median_sales_churned = median_weekly_sales_churned['Median Veckoförsäljning (SEK)'].sum()
                 st.markdown(f"**Totalt:** `{total_median_sales_churned:,.0f} SEK`")
                 median_weekly_sales_churned.sort_values('Median Veckoförsäljning (SEK)', ascending=False, inplace=True)
                 st.dataframe(median_weekly_sales_churned.style.format({'Median Veckoförsäljning (SEK)': '{:,.0f}'}), use_container_width=True)
             else:
-                st.success("Inga förlorade butiker med försäljning under denna period.", icon="✅")
-            
-            del churned_stores_df, median_weekly_sales_churned
-            gc.collect()
-
+                st.success("Inga förlorade butiker med positiv försäljning under denna period.", icon="✅")
         else:
             st.success("Inga butiker förlorade under denna period.", icon="✅")
 
