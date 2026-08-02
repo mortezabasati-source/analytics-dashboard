@@ -1,11 +1,12 @@
 import os
-import pandas as pd
+from datetime import datetime, timedelta
+from pathlib import Path
+
 import numpy as np
+import pandas as pd
+import streamlit as st
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
-import streamlit as st
-from pathlib import Path
-from datetime import datetime, timedelta
 
 # --- Robust .env loading ---
 # Construct the path to the .env file in the project root directory.
@@ -57,7 +58,7 @@ def create_mock_data():
     df['order_date'] = df['order_date'].dt.date # Convert to date object
     return df
 
-@st.cache_data(ttl=300, max_entries=5) # Cache for 5 mins, keep only 5 recent entries
+@st.cache_data(ttl="1h", max_entries=2)
 def load_data():
     """Loads data from the MySQL view with a fallback to mock data."""
     try:
@@ -93,6 +94,10 @@ def load_data():
             query = text(f"SELECT * FROM {view_name}")
             df = pd.read_sql(query, connection)
 
+        # --- Memory Usage Logging (Before Optimization) ---
+        mem_usage_before = df.memory_usage(deep=True).sum() / 1e6
+        print(f"--- Memory Usage Before Optimization: {mem_usage_before:.2f} MB ---")
+
         # --- Data Type Conversion ---
         # Create a mapping from actual DB column names (from .env) to standard app column names
         column_mapping = {
@@ -119,28 +124,38 @@ def load_data():
         # Convert data types on standardized column names
         df['order_date'] = pd.to_datetime(df['order_date'], errors='coerce')
         
+        # --- Business Logic Calculations (before final type conversion) ---
+        df['net_sales'] = pd.to_numeric(df['sales'], errors='coerce').fillna(0) - pd.to_numeric(df['return_sales'], errors='coerce').fillna(0)
+        
         # --- Memory Optimization: Downcasting and Category Conversion ---
         for col in ['sales', 'return_sales']:
             df[col] = pd.to_numeric(df[col], errors='coerce').astype('float32')
+        df['net_sales'] = df['net_sales'].astype('float32') # Downcast calculated column
+
         for col in ['quantity', 'return_quantity']:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype('int32')
         
+        # Drop rows with critical missing data after initial numeric conversion
+        df.dropna(subset=['order_date', 'sales', 'quantity'], inplace=True)
+
+        # Calculate return rate after cleaning and before converting to category
+        df['return_rate'] = (df['return_sales'] / df['sales'].replace(0, np.nan)).replace([np.inf, -np.inf], 0).fillna(0).astype('float32')
+
+        # --- Add Time-Based Keys for Robust Filtering ---
+        df['year_month_key'] = df['order_date'].dt.strftime('%Y-M%m')
+        df['year_week_key'] = df['order_date'].dt.strftime('%Y-W%U')
+
+        # Convert low-cardinality string/object columns to 'category'
         for col in ['category', 'product_name', 'store_name', 'location']:
             if col in df.columns:
                 df[col] = df[col].astype('category')
-        
-        # --- Simplified Business Logic ---
-        # Calculate net_sales and return_rate directly without any time shifting.
-        # This simplifies debugging and ensures consistency.
-        df['net_sales'] = df['sales'] - df['return_sales'].fillna(0)
-        df['return_rate'] = (df['return_sales'] / df['sales'].replace(0, np.nan)).replace([np.inf, -np.inf], 0).fillna(0)
-        df.dropna(subset=['order_date', 'sales', 'quantity'], inplace=True) # Keep main columns clean
+        df['year_month_key'] = df['year_month_key'].astype('category')
+        df['year_week_key'] = df['year_week_key'].astype('category')
 
-        # --- Add Time-Based Keys for Robust Filtering ---
-        # Year-Month key, e.g., "2024-M08"
-        df['year_month_key'] = df['order_date'].dt.strftime('%Y-M%m')
-        # Year-Week key (Sunday-based), e.g., "2024-W30"
-        df['year_week_key'] = df['order_date'].dt.strftime('%Y-W%U')
+        mem_usage_after = df.memory_usage(deep=True).sum() / 1e6
+        print(f"--- Memory Usage After Optimization: {mem_usage_after:.2f} MB ---")
+        print(f"--- Optimization Complete. Memory saved: {(mem_usage_before - mem_usage_after):.2f} MB ---")
+
         df['order_date'] = df['order_date'].dt.date # Convert back to date object for filtering
         return df
     except Exception as e:
