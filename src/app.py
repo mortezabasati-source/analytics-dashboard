@@ -281,11 +281,11 @@ def display_store_performance(filtered_df, prev_year_df, selected_status_key):
 
     def color_yoy(val):
         if pd.isna(val): return ''
-        return 'color: red' if val < 0 else 'color: green'
+        return 'color: red' if val < 0 else 'color: #228B22' # Darker green for better contrast
 
     def color_return_yoy(val):
         if pd.isna(val): return ''
-        return 'color: green' if val < 0 else 'color: red'
+        return 'color: #228B22' if val < 0 else 'color: red' # Darker green for better contrast
 
     st.dataframe(
         display_df[cols].style.format({
@@ -323,7 +323,6 @@ def display_new_churned_stores(filtered_df, prev_year_df):
                 columns={'store_name': 'Butik', 'net_sales': 'Total Nettoförsäljning (SEK)'}
             )
             total_sales = total_sales[total_sales['Total Nettoförsäljning (SEK)'] > 0]
-
             if not total_sales.empty:
                 st.markdown(f"**Totalt:** `{total_sales['Total Nettoförsäljning (SEK)'].sum():,.0f} SEK`")
                 total_sales = total_sales.sort_values('Total Nettoförsäljning (SEK)', ascending=False)
@@ -341,7 +340,6 @@ def display_new_churned_stores(filtered_df, prev_year_df):
                 columns={'store_name': 'Butik', 'net_sales': 'Total Nettoförsäljning (SEK)'}
             )
             total_sales_ch = total_sales_ch[total_sales_ch['Total Nettoförsäljning (SEK)'] > 0]
-
             if not total_sales_ch.empty:
                 st.markdown(f"**Totalt:** `{total_sales_ch['Total Nettoförsäljning (SEK)'].sum():,.0f} SEK`")
                 total_sales_ch = total_sales_ch.sort_values('Total Nettoförsäljning (SEK)', ascending=False)
@@ -545,6 +543,71 @@ def main():
     st.title("Försäljningsöversikt")
     if start_date and end_date:
         st.markdown(f"Data från **{start_date.strftime('%Y-%m-%d')}** till **{end_date.strftime('%Y-%m-%d')}**")
+
+    # --- Store Group KPI Section ---
+    def categorize_store_group(store_name):
+        """Categorizes a store name into ICA, Coop, Hemköp, or Övrig."""
+        name_lower = str(store_name).lower()
+        if name_lower.startswith('ica'):
+            return 'ICA'
+        elif name_lower.startswith('coop'):
+            return 'Coop'
+        elif name_lower.startswith('hemköp'):
+            return 'Hemköp'
+        else:
+            return 'Övrig'
+
+    filtered_df['store_group'] = filtered_df['store_name'].apply(categorize_store_group)
+    if not prev_year_df.empty:
+        prev_year_df['store_group'] = prev_year_df['store_name'].apply(categorize_store_group)
+
+    group_sales_current = filtered_df.groupby('store_group')['net_sales'].sum()
+    group_sales_prev = prev_year_df.groupby('store_group')['net_sales'].sum() if not prev_year_df.empty else pd.Series(dtype='float64')
+
+    all_groups = ['ICA', 'Coop', 'Hemköp', 'Övrig']
+    group_sales_current = group_sales_current.reindex(all_groups, fill_value=0)
+    group_sales_prev = group_sales_prev.reindex(all_groups, fill_value=0)
+
+    epsilon = 1e-9
+    group_yoy_delta = ((group_sales_current - group_sales_prev) / (group_sales_prev.abs() + epsilon)) * 100
+
+    st.markdown("#### Försäljning per Butikskedja")
+
+    # --- Custom CSS for KPI Card Backgrounds ---
+    st.markdown("""
+    <style>
+    /* Target the columns that hold the KPI cards */
+    div[data-testid="stHorizontalBlock"] > div:nth-child(1) > div {
+        background-color: #ffcccc; /* Light Red for ICA */
+        border-radius: 10px; padding: 15px;
+    }
+    div[data-testid="stHorizontalBlock"] > div:nth-child(2) > div {
+        background-color: #ccffcc; /* Light Green for Coop */
+        border-radius: 10px; padding: 15px;
+    }
+    div[data-testid="stHorizontalBlock"] > div:nth-child(3) > div {
+        background-color: #ffebcc; /* Light Orange for Hemköp */
+        border-radius: 10px; padding: 15px;
+    }
+    div[data-testid="stHorizontalBlock"] > div:nth-child(4) > div {
+        background-color: #ffffcc; /* Light Yellow for Övrig */
+        border-radius: 10px; padding: 15px;
+    }
+
+    /* Change the color of the positive delta in all metric cards to blue */
+    div[data-testid="stMetricDelta"] > div {
+        color: #004080 !important; /* Darker blue for positive delta */
+    }
+
+    </style>
+    """, unsafe_allow_html=True)
+
+    kpi_cols = st.columns(4)
+    kpi_cols[0].metric("ICA Nettoförsäljning", f"{(group_sales_current.get('ICA', 0)/1000):,.1f} kSEK", f"{group_yoy_delta.get('ICA', 0):.2f}% vs Föregående År")
+    kpi_cols[1].metric("Coop Nettoförsäljning", f"{(group_sales_current.get('Coop', 0)/1000):,.1f} kSEK", f"{group_yoy_delta.get('Coop', 0):.2f}% vs Föregående År")
+    kpi_cols[2].metric("Hemköp Nettoförsäljning", f"{(group_sales_current.get('Hemköp', 0)/1000):,.1f} kSEK", f"{group_yoy_delta.get('Hemköp', 0):.2f}% vs Föregående År")
+    kpi_cols[3].metric("Övrig Nettoförsäljning", f"{(group_sales_current.get('Övrig', 0)/1000):,.1f} kSEK", f"{group_yoy_delta.get('Övrig', 0):.2f}% vs Föregående År")
+    st.markdown("---") # Visual separator
 
     if filtered_df.empty:
         st.warning("Ingen data tillgänglig för valda filter. Välj ett annat intervall.")

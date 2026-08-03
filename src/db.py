@@ -121,6 +121,10 @@ def load_data():
         # Rename all columns at once for efficiency and consistency
         df.rename(columns=column_mapping, inplace=True)
 
+        # --- Data Cleaning: Strip whitespace from key categorical columns ---
+        # This prevents merge/join issues later due to leading/trailing spaces.
+        df['store_name'] = df['store_name'].astype(str).str.strip()
+
         # Convert data types on standardized column names
         df['order_date'] = pd.to_datetime(df['order_date'], errors='coerce')
         
@@ -136,6 +140,7 @@ def load_data():
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype('int32')
         
         # Drop rows with critical missing data after initial numeric conversion
+        # This step is crucial and might be why some stores appear to have no data if their core metrics are missing.
         df.dropna(subset=['order_date', 'sales', 'quantity'], inplace=True)
 
         # Calculate return rate after cleaning and before converting to category
