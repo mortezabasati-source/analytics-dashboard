@@ -187,7 +187,7 @@ def display_correlated_return_analysis(filtered_df):
     )
     st.plotly_chart(fig_corr_return, use_container_width=True)
 
-def display_store_performance(filtered_df, prev_year_df, selected_status_key):
+def display_store_performance(filtered_df, prev_year_df):
     """Displays the Store Performance Leaderboard using robust explicit joins."""
     st.markdown("### Butikernas Prestation")
 
@@ -256,12 +256,6 @@ def display_store_performance(filtered_df, prev_year_df, selected_status_key):
             store_perf = pd.merge(store_perf, corr_totals[['store_name', 'correlated_return_rate']], on='store_name', how='left').fillna({'correlated_return_rate': 0})
             top_20_returns = store_perf.nlargest(20, 'correlated_return_rate')['store_name'].tolist()
             store_perf.loc[store_perf['store_name'].isin(top_20_returns), 'Status'] += '🚩'
-
-    # Filter status
-    if selected_status_key == 'Medal':
-        store_perf = store_perf[store_perf['Status'].str.contains('🥇')]
-    elif selected_status_key == 'Flag':
-        store_perf = store_perf[store_perf['Status'].str.contains('🚩')]
 
     store_perf = store_perf.sort_values('net_sales', ascending=False)
 
@@ -482,10 +476,6 @@ def main():
 
     categories = ['All'] + sorted(df['category'].dropna().unique().tolist())
     selected_category = st.sidebar.selectbox("Välj produkttyp (typ)", options=categories)
-
-    st.sidebar.markdown("---")
-    status_options = {'All': 'Visa alla', 'Medal': '🥇 Endast Medalj', 'Flag': '🚩 Endast Flagga'}
-    selected_status_key = st.sidebar.selectbox("Filtrera efter status", options=list(status_options.keys()), format_func=lambda x: status_options[x])
 
     st.sidebar.markdown("---")
     filter_mode = st.sidebar.radio("Välj filtermetod", ('Datumintervall', 'Veckovis', 'Månadsvis'), index=1, horizontal=True, label_visibility="collapsed")
@@ -723,7 +713,7 @@ def main():
     if filter_mode == 'Veckovis':
         display_correlated_return_analysis(filtered_df)
 
-    display_store_performance(filtered_df, prev_year_df, selected_status_key)
+    display_store_performance(filtered_df, prev_year_df)
 
     if not prev_year_df.empty:
         display_new_churned_stores(filtered_df, prev_year_df)
