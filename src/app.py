@@ -53,7 +53,7 @@ loading_animation_html = """
         width: 100%;
         font-family: 'Arial', sans-serif;
         font-weight: bold;
-        font-size: 15rem;
+        font-size: 5.5rem;
         z-index: 9999;
     }
     .loader-text {
