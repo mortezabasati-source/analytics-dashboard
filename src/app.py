@@ -1,10 +1,9 @@
 from datetime import datetime, timedelta
-import numpy as np
-import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
-import streamlit as st
-from dateutil.relativedelta import relativedelta
+import pandas as pd  # type: ignore
+import plotly.express as px  # type: ignore
+import plotly.graph_objects as go  # type: ignore
+import streamlit as st  # type: ignore
+from dateutil.relativedelta import relativedelta  # type: ignore
 
 from db import load_data  # Import the data loading function
 
@@ -53,7 +52,7 @@ loading_animation_html = """
         width: 100%;
         font-family: 'Arial', sans-serif;
         font-weight: bold;
-        font-size: 5.5rem;
+        font-size: 15rem;
         z-index: 9999;
     }
     .loader-text {
@@ -197,7 +196,8 @@ def display_store_performance(filtered_df, prev_year_df):
         all_stores.update(prev_year_df['store_name'].dropna().unique())
 
     store_perf = pd.DataFrame({'store_name': list(all_stores)})
-    store_perf['store_name'] = store_perf['store_name'].astype(str).str.strip()
+    # Ensure all store names are strings and strip whitespace. Use map to avoid Series.str typing issues.
+    store_perf['store_name'] = store_perf['store_name'].map(lambda x: (str(x) if x is not None else '').strip())
     store_perf = store_perf[store_perf['store_name'] != '']
 
     # Current period metrics
@@ -208,6 +208,9 @@ def display_store_performance(filtered_df, prev_year_df):
     ).reset_index()
     curr_metrics['net_sales'] = curr_metrics['gross_sales'] - curr_metrics['return_sales']
     curr_metrics['return_rate'] = (curr_metrics['return_sales'] / curr_metrics['gross_sales'].replace(0, 1)) * 100
+    curr_metrics[['gross_sales', 'return_sales', 'quantity', 'net_sales', 'return_rate']] = curr_metrics[
+        ['gross_sales', 'return_sales', 'quantity', 'net_sales', 'return_rate']
+    ].apply(pd.to_numeric, errors='coerce').fillna(0)
 
     store_perf = pd.merge(store_perf, curr_metrics, on='store_name', how='left').fillna(0)
 
@@ -224,27 +227,76 @@ def display_store_performance(filtered_df, prev_year_df):
         ).reset_index()
         prev_metrics['net_sales_prev'] = prev_metrics['gross_sales_prev'] - prev_metrics['return_sales_prev']
         prev_metrics['return_rate_prev'] = (prev_metrics['return_sales_prev'] / prev_metrics['gross_sales_prev'].replace(0, 1)) * 100
+        prev_metrics[['gross_sales_prev', 'return_sales_prev', 'quantity_prev', 'net_sales_prev', 'return_rate_prev']] = prev_metrics[
+            ['gross_sales_prev', 'return_sales_prev', 'quantity_prev', 'net_sales_prev', 'return_rate_prev']
+        ].apply(pd.to_numeric, errors='coerce')
 
         store_perf = pd.merge(store_perf, prev_metrics, on='store_name', how='left')
+
+        # Ensure numeric types for calculations
+        for col in ['net_sales', 'net_sales_prev', 'quantity', 'quantity_prev', 'return_rate', 'return_rate_prev']:
+            if col in store_perf.columns:
+                store_perf[col] = pd.to_numeric(store_perf[col], errors='coerce')
 
         # Calculate YoY only if previous year sales exist
         has_prev_sales = store_perf['net_sales_prev'].notna() & (store_perf['net_sales_prev'] > 0)
         has_prev_qty = store_perf['quantity_prev'].notna() & (store_perf['quantity_prev'] > 0)
 
-        store_perf.loc[has_prev_sales, 'net_sales_yoy'] = (
-            (store_perf.loc[has_prev_sales, 'net_sales'] - store_perf.loc[has_prev_sales, 'net_sales_prev']) / store_perf.loc[has_prev_sales, 'net_sales_prev']
-        ) * 100
+        # Ensure numeric types explicitly before arithmetic to avoid type errors
+        store_perf['net_sales'] = pd.to_numeric(store_perf['net_sales'], errors='coerce')
+        store_perf['net_sales_prev'] = pd.to_numeric(store_perf['net_sales_prev'], errors='coerce')
 
-        store_perf.loc[has_prev_qty, 'quantity_yoy'] = (
-            (store_perf.loc[has_prev_qty, 'quantity'] - store_perf.loc[has_prev_qty, 'quantity_prev']) / store_perf.loc[has_prev_qty, 'quantity_prev']
-        ) * 100
+        # Avoid division by zero by treating zeros as NaN for the ratio, compute YoY and fill NaN with 0
+        numer = pd.to_numeric(store_perf.loc[has_prev_sales, 'net_sales'], errors='coerce')
+        denom = pd.to_numeric(store_perf.loc[has_prev_sales, 'net_sales_prev'], errors='coerce')
+        if not isinstance(numer, pd.Series):
+            numer = pd.Series(numer, index=store_perf.loc[has_prev_sales].index)
+        if not isinstance(denom, pd.Series):
+            denom = pd.Series(denom, index=store_perf.loc[has_prev_sales].index)
+        denom = denom.where(denom != 0, pd.NA).fillna(1)
+        store_perf.loc[has_prev_sales, 'net_sales_yoy'] = ((numer - denom) / denom) * 100
+        store_perf['net_sales_yoy'] = store_perf['net_sales_yoy'].fillna(0)
 
-        store_perf.loc[has_prev_sales, 'return_rate_yoy'] = store_perf.loc[has_prev_sales, 'return_rate'] - store_perf.loc[has_prev_sales, 'return_rate_prev']
+        store_perf['quantity'] = pd.to_numeric(store_perf['quantity'], errors='coerce')
+        store_perf['quantity_prev'] = pd.to_numeric(store_perf['quantity_prev'], errors='coerce')
+        qty_numer = pd.to_numeric(store_perf.loc[has_prev_qty, 'quantity'], errors='coerce')
+        qty_denom = pd.to_numeric(store_perf.loc[has_prev_qty, 'quantity_prev'], errors='coerce')
+        if not isinstance(qty_numer, pd.Series):
+            qty_numer = pd.Series(qty_numer, index=store_perf.loc[has_prev_qty].index)
+        if not isinstance(qty_denom, pd.Series):
+            qty_denom = pd.Series(qty_denom, index=store_perf.loc[has_prev_qty].index)
+        qty_denom = qty_denom.where(qty_denom != 0, pd.NA).fillna(1)
+        store_perf.loc[has_prev_qty, 'quantity_yoy'] = ((qty_numer - qty_denom) / qty_denom) * 100
+        store_perf['quantity_yoy'] = store_perf['quantity_yoy'].fillna(0)
+
+        # Ensure return rates are numeric to avoid unsupported operand errors during subtraction
+        rr = pd.to_numeric(store_perf['return_rate'], errors='coerce')
+        if not isinstance(rr, pd.Series):
+            rr = pd.Series(rr, index=store_perf.index)
+        store_perf['return_rate'] = rr.fillna(0)
+
+        rr_prev = pd.to_numeric(store_perf['return_rate_prev'], errors='coerce')
+        if not isinstance(rr_prev, pd.Series):
+            rr_prev = pd.Series(rr_prev, index=store_perf.index)
+        store_perf['return_rate_prev'] = rr_prev.fillna(0)
+        # Coerce to numeric to avoid unsupported operand types during subtraction
+        left = pd.to_numeric(store_perf.loc[has_prev_sales, 'return_rate'], errors='coerce')
+        if not isinstance(left, pd.Series):
+            left = pd.Series(left, index=store_perf.loc[has_prev_sales].index)
+        left = left.fillna(0)
+        right = pd.to_numeric(store_perf.loc[has_prev_sales, 'return_rate_prev'], errors='coerce')
+        if not isinstance(right, pd.Series):
+            right = pd.Series(right, index=store_perf.loc[has_prev_sales].index)
+        right = right.fillna(0)
+        store_perf.loc[has_prev_sales, 'return_rate_yoy'] = left - right
 
     # Correlated returns flagging
     store_perf['Status'] = ''
     top_20_sales = store_perf.nlargest(20, 'net_sales')['store_name'].tolist()
-    store_perf.loc[store_perf['store_name'].isin(top_20_sales), 'Status'] += '🥇'
+    top_20_sales_mask = store_perf['store_name'].isin(top_20_sales)
+    store_perf.loc[top_20_sales_mask, 'Status'] = (
+        store_perf.loc[top_20_sales_mask, 'Status'].astype(str) + '🥇'
+    )
 
     if not filtered_df.empty:
         weekly_store = filtered_df.groupby('store_name').apply(safe_weekly_resample).reset_index()
@@ -255,7 +307,10 @@ def display_store_performance(filtered_df, prev_year_df):
 
             store_perf = pd.merge(store_perf, corr_totals[['store_name', 'correlated_return_rate']], on='store_name', how='left').fillna({'correlated_return_rate': 0})
             top_20_returns = store_perf.nlargest(20, 'correlated_return_rate')['store_name'].tolist()
-            store_perf.loc[store_perf['store_name'].isin(top_20_returns), 'Status'] += '🚩'
+            top_20_returns_mask = store_perf['store_name'].isin(top_20_returns)
+            store_perf.loc[top_20_returns_mask, 'Status'] = (
+                store_perf.loc[top_20_returns_mask, 'Status'].astype(str) + '🚩'
+            )
 
     store_perf = store_perf.sort_values('net_sales', ascending=False)
 
