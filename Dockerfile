@@ -18,4 +18,4 @@ EXPOSE $PORT
 WORKDIR /app/src
 
 # Run Streamlit with Cloud Run specific settings
-CMD streamlit run app.py --server.port=${PORT} --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false
+CMD streamlit run src/app.py --server.port=${PORT} --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false
