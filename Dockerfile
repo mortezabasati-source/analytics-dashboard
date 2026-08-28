@@ -1,21 +1,17 @@
 FROM python:3.10-slim
 
-# Set working directory
 WORKDIR /app
 
-# Copy requirements and install dependencies
+# کپی requirements و نصب پکیج‌ها
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application
+# کپی کل پروژه
 COPY . .
 
-# Expose port (Google Cloud Run provides the PORT environment variable, usually 8080)
+# تنظیمات پورت Cloud Run
 ENV PORT=8080
-EXPOSE $PORT
+EXPOSE 8080
 
-# Change working directory to src where app.py is located
-WORKDIR /app/src
-
-# Run Streamlit with Cloud Run specific settings
-CMD streamlit run src/app.py --server.port=${PORT} --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false
+# اجرای مستقیم app.py از داخل پوشه src
+CMD ["streamlit", "run", "src/app.py", "--server.port=8080", "--server.address=0.0.0.0", "--server.headless=true"]
