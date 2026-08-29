@@ -52,7 +52,7 @@ loading_animation_html = """
         width: 100%;
         font-family: 'Arial', sans-serif;
         font-weight: bold;
-        font-size: 15rem;
+        font-size: 6rem;
         z-index: 9999;
     }
     .loader-text {
@@ -201,7 +201,7 @@ def display_store_performance(filtered_df, prev_year_df):
     store_perf = store_perf[store_perf['store_name'] != '']
 
     # Current period metrics
-    curr_metrics = filtered_df.groupby('store_name').agg(
+    curr_metrics = filtered_df.groupby('store_name', observed=False).agg(
         gross_sales=('sales', 'sum'),
         return_sales=('return_sales', 'sum'),
         quantity=('quantity', 'sum')
@@ -220,7 +220,7 @@ def display_store_performance(filtered_df, prev_year_df):
     store_perf['return_rate_yoy'] = pd.NA
 
     if not prev_year_df.empty:
-        prev_metrics = prev_year_df.groupby('store_name').agg(
+        prev_metrics = prev_year_df.groupby('store_name', observed=False).agg(
             gross_sales_prev=('sales', 'sum'),
             return_sales_prev=('return_sales', 'sum'),
             quantity_prev=('quantity', 'sum')
@@ -299,10 +299,10 @@ def display_store_performance(filtered_df, prev_year_df):
     )
 
     if not filtered_df.empty:
-        weekly_store = filtered_df.groupby('store_name').apply(safe_weekly_resample).reset_index()
+        weekly_store = filtered_df.groupby('store_name', observed=False).apply(safe_weekly_resample).reset_index()
         if not weekly_store.empty and 'store_name' in weekly_store.columns:
-            weekly_store['sales_prev_week'] = weekly_store.groupby('store_name')['sales'].shift(1)
-            corr_totals = weekly_store.groupby('store_name')[['return_sales', 'sales_prev_week']].sum().reset_index()
+            weekly_store['sales_prev_week'] = weekly_store.groupby('store_name', observed=False)['sales'].shift(1)
+            corr_totals = weekly_store.groupby('store_name', observed=False)[['return_sales', 'sales_prev_week']].sum().reset_index()
             corr_totals['correlated_return_rate'] = (corr_totals['return_sales'] / corr_totals['sales_prev_week'].replace(0, 1)) * 100
 
             store_perf = pd.merge(store_perf, corr_totals[['store_name', 'correlated_return_rate']], on='store_name', how='left').fillna({'correlated_return_rate': 0})
@@ -402,7 +402,7 @@ def display_product_charts(filtered_df):
     """Displays Category Pie chart and Top 10 Products Bar chart."""
     col_chart1, col_chart2 = st.columns(2)
     with col_chart1:
-        category_sales = filtered_df.groupby('category')['sales'].sum().reset_index()
+        category_sales = filtered_df.groupby('category', observed=False)['sales'].sum().reset_index()
         category_sales['sales'] /= 1000
         fig_pie = px.pie(category_sales, names='category', values='sales', title='Försäljningsandel per Produkttyp', hole=0.4)
         fig_pie.update_traces(hovertemplate='<b>%{label}</b><br>Försäljning: %{value:,.1f} kSEK<br>Andel: %{percent}')
@@ -429,17 +429,17 @@ def display_smart_insights(filtered_df, prev_year_df):
         with col1:
             best_store_name, best_yoy = None, None
             if not prev_year_df.empty:
-                curr_sales = filtered_df.groupby('store_name')['net_sales'].sum()
-                prev_sales = prev_year_df.groupby('store_name')['net_sales'].sum()
-                
-                yoy_df = pd.DataFrame({'current': curr_sales, 'previous': prev_sales}).dropna()
-                yoy_df = yoy_df[yoy_df['previous'] > 0] # Avoid division by zero and new stores
+                curr_sales = filtered_df.groupby('store_name', observed=False)['net_sales'].sum().reset_index()
+                prev_sales = prev_year_df.groupby('store_name', observed=False)['net_sales'].sum().reset_index()
+
+                yoy_df = pd.merge(curr_sales, prev_sales, on='store_name', suffixes=('_curr', '_prev'))
+                yoy_df = yoy_df[yoy_df['net_sales_prev'] > 0] # Avoid division by zero and new stores
 
                 if not yoy_df.empty:
-                    yoy_df['yoy_growth'] = ((yoy_df['current'] - yoy_df['previous']) / yoy_df['previous']) * 100
-                    best_performer = yoy_df['yoy_growth'].idxmax()
-                    best_store_name = best_performer
-                    best_yoy = yoy_df.loc[best_performer, 'yoy_growth']
+                    yoy_df['yoy_growth'] = ((yoy_df['net_sales_curr'] - yoy_df['net_sales_prev']) / yoy_df['net_sales_prev']) * 100
+                    best_performer_idx = yoy_df['yoy_growth'].idxmax()
+                    best_store_name = yoy_df.loc[best_performer_idx, 'store_name']
+                    best_yoy = yoy_df.loc[best_performer_idx, 'yoy_growth']
 
             if best_store_name:
                 st.success(
@@ -454,16 +454,16 @@ def display_smart_insights(filtered_df, prev_year_df):
         with col2:
             worst_store_name, worst_rate = None, None
             # Use correlated return rate if available (weekly view)
-            weekly_store = filtered_df.groupby('store_name').apply(safe_weekly_resample).reset_index()
+            weekly_store = filtered_df.groupby('store_name', observed=False).apply(safe_weekly_resample).reset_index()
             if not weekly_store.empty and 'store_name' in weekly_store.columns:
-                weekly_store['sales_prev_week'] = weekly_store.groupby('store_name')['sales'].shift(1)
-                corr_totals = weekly_store.groupby('store_name')[['return_sales', 'sales_prev_week']].sum()
+                weekly_store['sales_prev_week'] = weekly_store.groupby('store_name', observed=False)['sales'].shift(1)
+                corr_totals = weekly_store.groupby('store_name', observed=False)[['return_sales', 'sales_prev_week']].sum().reset_index()
                 corr_totals = corr_totals[corr_totals['sales_prev_week'] > 0]
                 if not corr_totals.empty:
                     corr_totals['corr_rate'] = (corr_totals['return_sales'] / corr_totals['sales_prev_week']) * 100
-                    worst_performer = corr_totals['corr_rate'].idxmax()
-                    worst_store_name = worst_performer
-                    worst_rate = corr_totals.loc[worst_performer, 'corr_rate']
+                    worst_performer_idx = corr_totals['corr_rate'].idxmax()
+                    worst_store_name = corr_totals.loc[worst_performer_idx, 'store_name']
+                    worst_rate = corr_totals.loc[worst_performer_idx, 'corr_rate']
 
             if worst_store_name:
                 st.warning(
@@ -477,12 +477,13 @@ def display_smart_insights(filtered_df, prev_year_df):
         # --- Insight 3: Top Product Category by Sales ---
         with col3:
             if not filtered_df.empty:
-                category_sales = filtered_df.groupby('category')['sales'].sum()
+                category_sales = filtered_df.groupby('category', observed=False)['sales'].sum().reset_index()
                 total_sales = filtered_df['sales'].sum()
 
                 if total_sales > 0 and not category_sales.empty:
-                    top_category_name = category_sales.idxmax()
-                    top_category_share = (category_sales.max() / total_sales) * 100
+                    top_category_idx = category_sales['sales'].idxmax()
+                    top_category_name = category_sales.loc[top_category_idx, 'category']
+                    top_category_share = (category_sales['sales'].max() / total_sales) * 100
                     st.info(
                         f"**Top Category:** Produkttypen **{top_category_name}** står för störst andel av "
                         f"försäljningen (**{top_category_share:.1f}%**).",
@@ -606,8 +607,8 @@ def main():
     if not prev_year_df.empty:
         prev_year_df['store_group'] = prev_year_df['store_name'].apply(categorize_store_group)
 
-    group_sales_current = filtered_df.groupby('store_group')['net_sales'].sum()
-    group_sales_prev = prev_year_df.groupby('store_group')['net_sales'].sum() if not prev_year_df.empty else pd.Series(dtype='float64')
+    group_sales_current = filtered_df.groupby('store_group', observed=False)['net_sales'].sum()
+    group_sales_prev = prev_year_df.groupby('store_group', observed=False)['net_sales'].sum() if not prev_year_df.empty else pd.Series(dtype='float64')
 
     all_groups = ['ICA', 'Coop', 'Hemköp', 'Övrig']
     group_sales_current = group_sales_current.reindex(all_groups, fill_value=0)
@@ -702,7 +703,7 @@ def main():
             return agg_df
 
         current_agg = aggregate_data(df_curr)
-        previous_agg = aggregate_data(df_prev) if not df_prev.empty else pd.DataFrame()
+        previous_agg = aggregate_data(df_prev) if not df_prev.empty else pd.DataFrame(columns=current_agg.columns)
 
         yoy_data = pd.merge(current_agg, previous_agg, on=time_key_col, suffixes=('_curr', '_prev'), how='left')
         yoy_data = yoy_data.fillna({'sales_prev': 0, 'net_sales_kSEK_prev': 0, 'return_rate_prev': 0})
