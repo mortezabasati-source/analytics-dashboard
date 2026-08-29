@@ -181,7 +181,7 @@ def display_correlated_return_analysis(filtered_df):
         barmode='overlay',
         title_x=0, margin=dict(l=0, r=0, t=40, b=0),
         yaxis=dict(title='Bruttoförsäljning (kSEK)'),
-        yaxis2=dict(title='Korrelerad Returandel (%)', overlaying='y', side='right', showgrid=False, ticksuffix='%', dtick=1),
+        yaxis2=dict(title='Korrelerad Returandel (%)', overlaying='y', side='right', showgrid=False, ticksuffix='%', range=[0, 100]),
         legend_title_text='Mått'
     )
     st.plotly_chart(fig_corr_return, use_container_width=True)
@@ -760,7 +760,7 @@ def main():
             barmode='overlay', title_text='Bruttoförsäljning & Returandel vs Föregående År',
             title_x=0, margin=dict(l=0, r=0, t=30, b=0),
             yaxis=dict(title='Bruttoförsäljning (kSEK)'),
-            yaxis2=dict(title='Returandel (%)', overlaying='y', side='right', showgrid=False, ticksuffix='%', dtick=1),
+            yaxis2=dict(title='Returandel (%)', overlaying='y', side='right', showgrid=False, ticksuffix='%', range=[0, 100]),
             legend_title_text='Period & Mått'
         )
         st.plotly_chart(fig_line, use_container_width=True)
