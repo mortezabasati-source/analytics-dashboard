@@ -5,7 +5,7 @@ import plotly.graph_objects as go  # type: ignore
 import streamlit as st  # type: ignore
 from dateutil.relativedelta import relativedelta  # type: ignore
 
-from db import load_data  # Import the data loading function
+from db import load_data, get_date_boundaries  # Import the data loading function
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -114,6 +114,98 @@ def safe_weekly_resample(df):
     df_temp['order_date'] = pd.to_datetime(df_temp['order_date'])
     return df_temp.set_index('order_date').resample('W-SAT')[['sales', 'return_sales']].sum()
 
+@st.cache_data(ttl="1h", max_entries=5)
+def filter_dataframe(df, start_date, end_date, selected_store, selected_location, selected_category):
+    """Filters the dataframe based on provided criteria to leverage caching."""
+    filtered_df = df.copy()
+    if start_date and end_date:
+        filtered_df = filtered_df[(filtered_df['order_date'] >= start_date) & (filtered_df['order_date'] <= end_date)]
+    if selected_store != 'All':
+        filtered_df = filtered_df[filtered_df['store_name'] == selected_store]
+    if selected_location != 'All':
+        filtered_df = filtered_df[filtered_df['location'] == selected_location]
+    if selected_category != 'All':
+        filtered_df = filtered_df[filtered_df['category'] == selected_category]
+    return filtered_df
+
+def get_filtered_data_sets(df, filter_mode, global_min_date, global_max_date, min_loaded_date):
+    """Handles time-based filtering and smart reloading."""
+    start_date, end_date = None, None
+    filtered_df, prev_year_df = pd.DataFrame(), pd.DataFrame()
+    needs_reload = False
+    reload_date = None
+
+    week_key_to_date = df.groupby('year_week_key', observed=False)['order_date'].first()
+    def format_week_label(week_key):
+        if week_key not in week_key_to_date:
+            return week_key
+        year, week_u_str = week_key.split('-W')
+        current_week = int(week_u_str)
+        next_week = current_week + 1
+        return f"V{current_week}/{next_week}, {year}"
+
+    if filter_mode == 'Datumintervall':
+        today = datetime.now().date()
+        start_of_current_week = today - timedelta(days=(today.weekday() + 1) % 7)
+        calculated_start_date = start_of_current_week - timedelta(weeks=4)
+        default_start_date = max(global_min_date, calculated_start_date)
+        default_end_date = min(today, global_max_date)
+        
+        date_range = st.sidebar.date_input("Välj datumintervall", value=(default_start_date, default_end_date), min_value=global_min_date, max_value=global_max_date)
+        
+        if len(date_range) == 2:
+            start_date, end_date = date_range
+            # Smart Reload Check: If user selects a date older than what's loaded
+            if start_date < min_loaded_date or (start_date - relativedelta(years=1)) < min_loaded_date:
+                # We want to load older data, but not older than global_min_date
+                target_load_date = start_date - relativedelta(years=1)
+                if target_load_date < global_min_date:
+                    target_load_date = global_min_date
+                
+                # Only trigger reload if the target is actually older than what we have
+                if target_load_date < min_loaded_date:
+                    needs_reload = True
+                    reload_date = target_load_date
+                
+            # Check if user selected a date that requires previous year data that doesn't exist
+            required_prev_year_start = start_date - relativedelta(years=1)
+            if required_prev_year_start < global_min_date:
+                st.warning(f"⚠️ **Otillräcklig historik:** För att kunna visa jämförelser med föregående år måste startdatumet vara tidigast **{(global_min_date + relativedelta(years=1)).strftime('%Y-%m-%d')}**. Vänligen justera ditt val i kalendern.", icon="⚠️")
+                st.stop() # Stop execution so we don't render broken charts
+                
+            filtered_df = df[(df['order_date'] >= start_date) & (df['order_date'] <= end_date)]
+            
+            # Safely calculate previous year boundaries, ensuring we don't go before what the DB has
+            prev_year_start_date = start_date - relativedelta(years=1)
+            prev_year_end_date = end_date - relativedelta(years=1)
+            
+            prev_year_df = df[(df['order_date'] >= prev_year_start_date) & (df['order_date'] <= prev_year_end_date)]
+
+    elif filter_mode == 'Veckovis':
+        all_weeks = sorted(df['year_week_key'].unique(), reverse=True)
+        today = datetime.now().date()
+        target_weeks = [(today - timedelta(weeks=i)).strftime('%Y-W%U') for i in range(5)]
+        default_selection = [week for week in target_weeks if week in all_weeks] or all_weeks[:5]
+            
+        selected_weeks = st.sidebar.multiselect("Välj vecka/veckor", options=all_weeks, default=default_selection, format_func=format_week_label)
+        filtered_df = df[df['year_week_key'].isin(selected_weeks)]
+        prev_year_weeks = [f"{int(w.split('-W')[0]) - 1}-W{w.split('-W')[1]}" for w in selected_weeks]
+        prev_year_df = df[df['year_week_key'].isin(prev_year_weeks)]
+        if not filtered_df.empty:
+            start_date, end_date = filtered_df['order_date'].min(), filtered_df['order_date'].max()
+
+    elif filter_mode == 'Månadsvis':
+        all_months = sorted(df['year_month_key'].unique(), reverse=True)
+        selected_months = st.sidebar.multiselect("Välj månad/månader", options=all_months, default=all_months[:3])
+        filtered_df = df[df['year_month_key'].isin(selected_months)]
+        prev_year_months = [f"{int(m.split('-M')[0]) - 1}-M{m.split('-M')[1]}" for m in selected_months]
+        prev_year_df = df[df['year_month_key'].isin(prev_year_months)]
+        if not filtered_df.empty:
+            start_date, end_date = filtered_df['order_date'].min(), filtered_df['order_date'].max()
+            
+    return filtered_df, prev_year_df, start_date, end_date, needs_reload, reload_date, format_week_label
+
+@st.fragment
 def display_correlated_return_analysis(filtered_df):
     """Displays weekly correlated return analysis."""
     st.markdown("---")
@@ -186,6 +278,7 @@ def display_correlated_return_analysis(filtered_df):
     )
     st.plotly_chart(fig_corr_return, use_container_width=True)
 
+@st.fragment
 def display_store_performance(filtered_df, prev_year_df):
     """Displays the Store Performance Leaderboard using robust explicit joins."""
     st.markdown("### Butikernas Prestation")
@@ -350,6 +443,7 @@ def display_store_performance(filtered_df, prev_year_df):
         use_container_width=True
     )
 
+@st.fragment
 def display_new_churned_stores(filtered_df, prev_year_df):
     """Displays New and Churned stores with Actual Total Net Sales."""
     st.markdown("---")
@@ -398,6 +492,7 @@ def display_new_churned_stores(filtered_df, prev_year_df):
         else:
             st.success("Inga butiker förlorade under denna period.", icon="✅")
 
+@st.fragment
 def display_product_charts(filtered_df):
     """Displays Category Pie chart and Top 10 Products Bar chart."""
     col_chart1, col_chart2 = st.columns(2)
@@ -419,6 +514,7 @@ def display_product_charts(filtered_df):
         fig_bar.update_layout(title_x=0, margin=dict(l=0, r=0, t=30, b=0), yaxis={'categoryorder': 'total ascending'})
         st.plotly_chart(fig_bar, use_container_width=True)
 
+@st.fragment
 def display_smart_insights(filtered_df, prev_year_df):
     """Calculates and displays a set of dynamic, actionable insights."""
     st.markdown("---")
@@ -503,22 +599,34 @@ def main():
     loading_placeholder = st.empty()
     loading_placeholder.markdown(loading_animation_html, unsafe_allow_html=True)
     
-    df = load_data()
+    # --- Initial State & Global Boundaries ---
+    global_min_date, global_max_date = get_date_boundaries()
+    
+    # Calculate initial smart loading date (14 months back from global_max_date)
+    # We need 14 months to support Year-over-Year calculations for recent months
+    default_lazy_start_date = global_max_date - relativedelta(months=14)
+    # Keep it at first of the month for clean querying
+    default_lazy_start_date = default_lazy_start_date.replace(day=1)
+    
+    # Check session state for user requested start date, default to lazy loading date
+    if 'data_start_date' not in st.session_state:
+        st.session_state.data_start_date = default_lazy_start_date
+
+    # Load data based on session state date
+    df = load_data(st.session_state.data_start_date.strftime('%Y-%m-%d'))
     loading_placeholder.empty()
-
-    week_key_to_date = df.groupby('year_week_key')['order_date'].first()
-
-    def format_week_label(week_key):
-        if week_key not in week_key_to_date:
-            return week_key
-        year, week_u_str = week_key.split('-W')
-        current_week = int(week_u_str)
-        next_week = current_week + 1
-        return f"V{current_week}/{next_week}, {year}"
 
     # --- Sidebar Filters ---
     st.sidebar.header("Filter")
-    min_date, max_date = df['order_date'].min(), df['order_date'].max()
+    min_loaded_date, max_loaded_date = df['order_date'].min(), df['order_date'].max()
+    
+    # Check if we need to load older data based on user input bounds
+    st.sidebar.markdown(f"**Data Loaded From:** {min_loaded_date.strftime('%Y-%m-%d')}")
+    if min_loaded_date > global_min_date:
+        if st.sidebar.button("⬇️ Ladda äldre historik"):
+            # Load from the beginning of time (or a much older date)
+            st.session_state.data_start_date = global_min_date
+            st.rerun()
 
     locations = ['All'] + sorted(df['location'].dropna().unique().tolist())
     selected_location = st.sidebar.selectbox("Välj plats (ort)", options=locations)
@@ -536,55 +644,25 @@ def main():
     st.sidebar.markdown("---")
     filter_mode = st.sidebar.radio("Välj filtermetod", ('Datumintervall', 'Veckovis', 'Månadsvis'), index=1, horizontal=True, label_visibility="collapsed")
 
-    start_date, end_date = None, None
-    filtered_df, prev_year_df = pd.DataFrame(), pd.DataFrame()
-
-    if filter_mode == 'Datumintervall':
-        today = datetime.now().date()
-        start_of_current_week = today - timedelta(days=(today.weekday() + 1) % 7)
-        calculated_start_date = start_of_current_week - timedelta(weeks=4)
-        default_start_date = max(min_date, calculated_start_date)
-        default_end_date = min(today, max_date)
-        date_range = st.sidebar.date_input("Välj datumintervall", value=(default_start_date, default_end_date), min_value=min_date, max_value=max_date)
-        if len(date_range) == 2:
-            start_date, end_date = date_range
-            filtered_df = df[(df['order_date'] >= start_date) & (df['order_date'] <= end_date)]
-            prev_year_start_date = start_date - relativedelta(years=1)
-            prev_year_end_date = end_date - relativedelta(years=1)
-            prev_year_df = df[(df['order_date'] >= prev_year_start_date) & (df['order_date'] <= prev_year_end_date)]
-
-    elif filter_mode == 'Veckovis':
-        all_weeks = sorted(df['year_week_key'].unique(), reverse=True)
-        today = datetime.now().date()
-        target_weeks = [(today - timedelta(weeks=i)).strftime('%Y-W%U') for i in range(5)]
-        default_selection = [week for week in target_weeks if week in all_weeks] or all_weeks[:5]
-        selected_weeks = st.sidebar.multiselect("Välj vecka/veckor", options=all_weeks, default=default_selection, format_func=format_week_label)
-        filtered_df = df[df['year_week_key'].isin(selected_weeks)]
-        prev_year_weeks = [f"{int(w.split('-W')[0]) - 1}-W{w.split('-W')[1]}" for w in selected_weeks]
-        prev_year_df = df[df['year_week_key'].isin(prev_year_weeks)]
-
-    elif filter_mode == 'Månadsvis':
-        all_months = sorted(df['year_month_key'].unique(), reverse=True)
-        selected_months = st.sidebar.multiselect("Välj månad/månader", options=all_months, default=all_months[:3])
-        filtered_df = df[df['year_month_key'].isin(selected_months)]
-        prev_year_months = [f"{int(m.split('-M')[0]) - 1}-M{m.split('-M')[1]}" for m in selected_months]
-        prev_year_df = df[df['year_month_key'].isin(prev_year_months)]
-
-    if not filtered_df.empty and start_date is None:
-        start_date, end_date = filtered_df['order_date'].min(), filtered_df['order_date'].max()
-
-    if selected_store != 'All':
-        filtered_df = filtered_df[filtered_df['store_name'] == selected_store]
-        if not prev_year_df.empty:
-            prev_year_df = prev_year_df[prev_year_df['store_name'] == selected_store]
-    if selected_location != 'All':
-        filtered_df = filtered_df[filtered_df['location'] == selected_location]
-        if not prev_year_df.empty:
-            prev_year_df = prev_year_df[prev_year_df['location'] == selected_location]
-    if selected_category != 'All':
-        filtered_df = filtered_df[filtered_df['category'] == selected_category]
-        if not prev_year_df.empty:
-            prev_year_df = prev_year_df[prev_year_df['category'] == selected_category]
+    # Get time-filtered dataframes and handle smart reloading
+    time_filtered_df, time_prev_year_df, start_date, end_date, needs_reload, reload_date, format_week_label = get_filtered_data_sets(
+        df, filter_mode, global_min_date, global_max_date, min_loaded_date
+    )
+    
+    if needs_reload:
+        st.session_state.data_start_date = reload_date
+        st.rerun()
+        
+    # Apply category/store/location filters efficiently
+    if not time_filtered_df.empty:
+        filtered_df = filter_dataframe(time_filtered_df, None, None, selected_store, selected_location, selected_category)
+        if not time_prev_year_df.empty:
+            prev_year_df = filter_dataframe(time_prev_year_df, None, None, selected_store, selected_location, selected_category)
+        else:
+            prev_year_df = pd.DataFrame()
+    else:
+        filtered_df = pd.DataFrame()
+        prev_year_df = pd.DataFrame()
 
     st.title("Försäljningsöversikt")
     if start_date and end_date:

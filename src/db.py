@@ -21,7 +21,7 @@ def get_db_connection_string():
         f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
     )
 
-def create_mock_data():
+def create_mock_data(start_date_str=None):
     """Generates a mock DataFrame if the database connection fails."""
     st.warning("⚠️ Database connection failed. Using mock data for demonstration.", icon="🔥")
     end_date = datetime.now()
@@ -58,8 +58,48 @@ def create_mock_data():
     df['order_date'] = df['order_date'].dt.date # Convert to date object
     return df
 
-@st.cache_data(ttl="1h", max_entries=2)
-def load_data():
+@st.cache_data(ttl="1h", max_entries=1)
+def get_date_boundaries():
+    """Fetches the absolute minimum and maximum order dates from the database."""
+    try:
+        engine = create_engine(get_db_connection_string())
+        view_name = os.getenv('VIEW_NAME')
+        date_col = os.getenv('DATE_COLUMN_NAME')
+        if not view_name or not date_col:
+            raise ValueError("VIEW_NAME or DATE_COLUMN_NAME not set in .env")
+        
+        with engine.connect() as connection:
+            query = text(f"SELECT MIN({date_col}) as min_date, MAX({date_col}) as max_date FROM {view_name}")
+            result = connection.execute(query).fetchone()
+            
+            if result and result[0] and result[1]:
+                min_d = result[0]
+                max_d = result[1]
+                if isinstance(min_d, datetime): min_d = min_d.date()
+                elif isinstance(min_d, str): min_d = pd.to_datetime(min_d).date()
+                
+                if isinstance(max_d, datetime): max_d = max_d.date()
+                elif isinstance(max_d, str): max_d = pd.to_datetime(max_d).date()
+                
+                # Advance min_d to the first day of the NEXT month to ensure we start with a full month
+                # Because the very first month in the DB is often partial/incomplete
+                if min_d.day > 1:
+                    if min_d.month == 12:
+                        min_d = min_d.replace(year=min_d.year + 1, month=1, day=1)
+                    else:
+                        min_d = min_d.replace(month=min_d.month + 1, day=1)
+                        
+                return min_d, max_d
+    except Exception as e:
+        print(f"Error fetching boundaries: {e}")
+    
+    # Mock fallback
+    end_date = datetime.now().date()
+    start_date = end_date - timedelta(days=18 * 30)
+    return start_date, end_date
+
+@st.cache_data(ttl="1h", max_entries=4)
+def load_data(start_date_str=None):
     """Loads data from the MySQL view with a fallback to mock data."""
     try:
         # --- Pre-connection Check ---
@@ -86,13 +126,18 @@ def load_data():
             raise ValueError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
         view_name = os.getenv('VIEW_NAME')
+        date_col = os.getenv('DATE_COLUMN_NAME')
         engine = create_engine(get_db_connection_string())
         
         # The 'connect()' method is where the actual connection attempt happens.
         # Most credential/network errors will be caught here.
         with engine.connect() as connection:
-            query = text(f"SELECT * FROM {view_name}")
-            df = pd.read_sql(query, connection)
+            if start_date_str:
+                query = text(f"SELECT * FROM {view_name} WHERE {date_col} >= :start_date")
+                df = pd.read_sql(query, connection, params={"start_date": start_date_str})
+            else:
+                query = text(f"SELECT * FROM {view_name}")
+                df = pd.read_sql(query, connection)
 
         # --- Memory Usage Logging (Before Optimization) ---
         mem_usage_before = df.memory_usage(deep=True).sum() / 1e6
@@ -168,4 +213,4 @@ def load_data():
         st.error(f"An error occurred while connecting to the database. Please check credentials and network.")
         st.error(f"Error Type: `{type(e).__name__}`")
         st.error(f"Error Details: `{e}`")
-        return create_mock_data()
+        return create_mock_data(start_date_str)
