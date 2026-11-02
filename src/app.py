@@ -6,6 +6,7 @@ import streamlit as st  # type: ignore
 from dateutil.relativedelta import relativedelta  # type: ignore
 
 from db import load_data  # Import the data loading function
+from idle_session import install_idle_session_timeout
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -497,6 +498,7 @@ def display_smart_insights(filtered_df, prev_year_df):
 
 def main():
     """Main application execution flow."""
+    install_idle_session_timeout()
     force_ltr_css()
 
     # --- Loading Animation Placeholder (Placed at top before load_data) ---
