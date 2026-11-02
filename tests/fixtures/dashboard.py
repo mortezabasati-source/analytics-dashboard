@@ -13,7 +13,12 @@ SRC = Path(__file__).resolve().parents[2] / "src"
 sys.path.insert(0, str(SRC))
 
 
-def load_test_data():
+def get_test_date_boundaries():
+    today = date.today()
+    return today - timedelta(days=549), today
+
+
+def load_test_data(start_date_str=None):
     today = date.today()
     dates = [today - timedelta(days=day) for day in range(550)]
     df = pd.DataFrame({
@@ -31,6 +36,8 @@ def load_test_data():
     })
     df["year_week_key"] = pd.to_datetime(df["order_date"]).dt.strftime("%Y-W%U")
     df["year_month_key"] = pd.to_datetime(df["order_date"]).dt.strftime("%Y-M%m")
+    if start_date_str:
+        df = df[df["order_date"] >= date.fromisoformat(start_date_str)]
     return df
 
 
@@ -38,6 +45,7 @@ def load_test_data():
 # Credentials and .env files are never read by this test server.
 database = ModuleType("db")
 database.load_data = load_test_data
+database.get_date_boundaries = get_test_date_boundaries
 sys.modules["db"] = database
 runpy.run_path(str(SRC / "app.py"), run_name="__main__")
 
