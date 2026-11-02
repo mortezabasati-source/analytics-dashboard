@@ -149,6 +149,29 @@ def test_timeout_is_independent_for_each_tab(page, context, dashboard_url):
     active_page.close()
 
 
+def test_idle_timeout_inside_cross_origin_installer(page, installer_url):
+    """Match the GitHub Pages installer wrapping Cloud Run in an iframe."""
+    sockets = []
+    page.on("websocket", lambda socket: sockets.append(socket))
+    page.clock.install()
+    with page.expect_websocket(lambda socket: "/_stcore/stream" in socket.url):
+        page.goto(installer_url)
+    dashboard = page.frame(name="dashboard")
+    assert dashboard is not None
+    expect(dashboard.get_by_text("Dashboard run: 1", exact=True)).to_be_visible(timeout=30_000)
+    page.clock.pause_at((dashboard.evaluate("Date.now()") + 60_000) / 1000)
+    page.mouse.move(10, 10)
+
+    page.clock.fast_forward(WARNING_MS)
+    expect(dashboard.get_by_role("dialog", name="Är du fortfarande kvar?")).to_be_visible()
+    with sockets[0].expect_event("close"):
+        page.clock.fast_forward(TIMEOUT_MS - WARNING_MS)
+    dashboard.wait_for_url(re.compile(r"^blob:"))
+    expect(dashboard.get_by_role("heading", name="Sessionen har avslutats")).to_be_visible()
+    expect(page).to_have_url(installer_url)
+    assert sockets and all(socket.is_closed() for socket in sockets)
+
+
 @pytest.mark.real_time
 def test_disconnect_after_ten_actual_minutes(page, dashboard_url):
     sockets = open_dashboard(page, dashboard_url, simulated_time=False)

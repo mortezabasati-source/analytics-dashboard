@@ -141,3 +141,48 @@ python -m pytest -q --browser chromium
 ```
 
 این مسیرهای موقت فقط به محیط فعلی مربوط‌اند؛ برای محیط تازه از مراحل نصب بالا استفاده کنید.
+
+## بررسی نسخهٔ منتشرشده و صفحهٔ نصب‌کننده
+
+صفحهٔ نصب‌کنندهٔ GitHub Pages، برنامه را داخل یک iframe از مبدأ دیگری نمایش
+می‌دهد. تست `test_idle_timeout_inside_cross_origin_installer` همین ساختار را
+پوشش می‌دهد و هشدار، تغییر صفحهٔ داخلی به سند پایان سشن و بسته شدن وب‌سوکت را
+بررسی می‌کند؛ نشانی صفحهٔ بیرونی نصب‌کننده در این حالت ثابت می‌ماند.
+
+اگر در نسخهٔ منتشرشده هیچ هشداری ظاهر نمی‌شود، ابتدا مشخص کنید همان کد جدید
+روی نشانی‌ای که کاربران باز می‌کنند اجرا می‌شود. بررسی فقط مخزن گیت یا موفق بودن
+build، اجرای image جدید روی آن نشانی را تأیید نمی‌کند.
+
+برای این سرویس، در Cloud Shell اطلاعات مسیر ترافیک و آخرین revision آماده را بخوانید:
+
+```bash
+gcloud run services describe eataway-analytics-dashboard \
+  --project=inventory-system-504518 \
+  --region=europe-west1 \
+  --format='yaml(status.url,status.latestReadyRevisionName,status.traffic)'
+```
+
+از پوشهٔ کد به‌روز برنامه، ساخت و استقرار از سورس با دستور زیر انجام می‌شود:
+
+```bash
+git switch main
+git pull --ff-only origin main
+git log -1 --oneline
+gcloud run deploy eataway-analytics-dashboard \
+  --source . \
+  --project=inventory-system-504518 \
+  --region=europe-west1
+```
+
+پس از آماده شدن revision و بررسی مسیر ترافیک، برنامه را در یک تب تازه باز کنید.
+در Console مرورگر، **context مربوط به iframe خود Cloud Run** را انتخاب و بررسی کنید:
+
+```javascript
+typeof window.__streamlitIdleSession
+```
+
+نتیجهٔ مورد انتظار `"object"` است. در صفحهٔ بیرونی GitHub Pages این متغیر تعریف
+نمی‌شود؛ بررسی context صفحهٔ بیرونی نتیجهٔ معتبری برای تایمر برنامه نیست.
+اگر در context خود برنامه مقدار `"undefined"` دیدید، نسخهٔ اجراشده و خطاهای
+Console مربوط به بارگذاری component را بررسی کنید. اگر سرویس به ورود نیاز دارد،
+این بررسی باید پس از ورود انجام شود.

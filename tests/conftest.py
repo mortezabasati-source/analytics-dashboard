@@ -3,7 +3,9 @@ import socket
 import subprocess
 import sys
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 from urllib.error import URLError
 from urllib.request import urlopen
 
@@ -73,3 +75,42 @@ def dashboard_url(tmp_path_factory):
             except subprocess.TimeoutExpired:
                 server.kill()
                 server.wait(timeout=5)
+
+
+@pytest.fixture
+def installer_url(dashboard_url):
+    """Serve the installer from a real second origin, like GitHub Pages.
+
+    A fulfilled Playwright route has no server IP and can trigger Chromium's
+    private-network checks when it embeds a real loopback server.
+    """
+    body = (
+        '<!doctype html><html><head><title>Installer</title></head>'
+        '<body style="margin:0">'
+        f'<iframe name="dashboard" src="{dashboard_url}" '
+        'style="width:100vw;height:100vh;border:0"></iframe>'
+        '</body></html>'
+    ).encode("utf-8")
+
+    class InstallerHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path != "/":
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format, *args):
+            pass
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), InstallerHandler) as server:
+        worker = Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            yield f"http://127.0.0.1:{server.server_port}/"
+        finally:
+            server.shutdown()
+            worker.join(timeout=5)
